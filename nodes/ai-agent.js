@@ -82,6 +82,8 @@ module.exports = function (RED) {
         var openaiTools = mcpToolsToOpenAI(mcpTools);
         node.status({ fill: 'blue', shape: 'dot', text: openaiTools.length + ' tools loaded' });
 
+        var messages = [];
+        
         // 2. Build initial messages
         // Fix vada 3: msg.systemPrompt overrides the node config
         // (needed for prompts synced from Confluence)
