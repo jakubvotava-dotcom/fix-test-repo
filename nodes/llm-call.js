@@ -4,7 +4,10 @@ module.exports = function (RED) {
     var node = this;
     this.llmConfig = RED.nodes.getNode(config.llmConfig);
     this.systemPrompt = config.systemPrompt || '';
-    this.temperature = parseFloat(config.temperature) || 0.3;
+    // Fix vada 1: zero is a valid temperature - the original
+    // "parseFloat(x) || 0.3" turned 0 into 0.3 (0 is falsy in JS)
+    const parsedTemperature = parseFloat(config.temperature);
+    this.temperature = Number.isFinite(parsedTemperature) ? parsedTemperature : 0.3;
     this.jsonMode = config.jsonMode || false;
     this.maxTokens = parseInt(config.maxTokens, 10) || 4096;
 
@@ -18,10 +21,6 @@ module.exports = function (RED) {
       }
 
       var apiKey = (node.llmConfig.credentials && node.llmConfig.credentials.apiKey) || '';
-      if (!apiKey) {
-        done(new Error('No API key set in LLM config'));
-        return;
-      }
 
       var userContent = typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload || '');
       if (!userContent) {
@@ -36,8 +35,13 @@ module.exports = function (RED) {
         messages.push({ role: 'system', content: node.systemPrompt });
       }
       // Support msg.messages for multi-turn conversations
-      if (Array.isArray(msg.messages)) {
-        messages = messages.concat(msg.messages);
+      // Fix vada 3: msg.systemPrompt overrides the node config
+      // (needed for prompts synced from Confluence)
+      var systemPrompt = (typeof msg.systemPrompt === 'string' && msg.systemPrompt.length > 0)
+        ? msg.systemPrompt
+        : node.systemPrompt;
+      if (systemPrompt) {
+        messages.push({ role: 'system', content: systemPrompt });
       }
       messages.push({ role: 'user', content: userContent });
 
@@ -48,7 +52,7 @@ module.exports = function (RED) {
         max_tokens: node.maxTokens,
       };
 
-      // Pass tools if provided in msg.tools (for advanced use)
+    // Pass tools if provided in msg.tools (for advanced use)
       if (msg.tools && Array.isArray(msg.tools) && msg.tools.length > 0) {
         body.tools = msg.tools;
       }
@@ -59,12 +63,13 @@ module.exports = function (RED) {
 
       var url = node.llmConfig.baseUrl.replace(/\/+$/, '') + '/chat/completions';
 
+      // Fix vada 2: empty API key = no Authorization header (Ollama etc.)
+      var headers = { 'Content-Type': 'application/json' };
+      if (apiKey) { headers['Authorization'] = 'Bearer ' + apiKey; }
+
       fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + apiKey,
-        },
+        headers: headers,
         body: JSON.stringify(body),
       }).then(function (resp) {
         if (!resp.ok) {

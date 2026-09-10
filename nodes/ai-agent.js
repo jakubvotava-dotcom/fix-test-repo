@@ -6,7 +6,10 @@ module.exports = function (RED) {
     this.llmConfig = RED.nodes.getNode(config.llmConfig);
     this.systemPrompt = config.systemPrompt || '';
     this.maxIterations = parseInt(config.maxIterations, 10) || 10;
-    this.temperature = parseFloat(config.temperature) || 0.3;
+    // Fix vada 1: zero is a valid temperature - the original
+    // "parseFloat(x) || 0.3" turned 0 into 0.3 (0 is falsy in JS)
+    const parsedTemperature = parseFloat(config.temperature);
+    this.temperature = Number.isFinite(parsedTemperature) ? parsedTemperature : 0.3;
     this.maxTokens = parseInt(config.maxTokens, 10) || 4096;
 
     /**
@@ -38,12 +41,13 @@ module.exports = function (RED) {
       };
       if (tools && tools.length > 0) body.tools = tools;
 
+      // Fix vada 2: empty API key = no Authorization header (Ollama etc.)
+      var headers = { 'Content-Type': 'application/json' };
+      if (apiKey) { headers['Authorization'] = 'Bearer ' + apiKey; }
+
       return fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + apiKey,
-        },
+        headers: headers,
         body: JSON.stringify(body),
       }).then(function (resp) {
         if (!resp.ok) {
@@ -67,7 +71,6 @@ module.exports = function (RED) {
       if (!node.llmConfig) { done(new Error('No LLM provider configured')); return; }
 
       var apiKey = (node.llmConfig.credentials && node.llmConfig.credentials.apiKey) || '';
-      if (!apiKey) { done(new Error('No API key set in LLM config')); return; }
 
       var userMessage = typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload || '');
       if (!userMessage) { done(new Error('No input — send text in msg.payload')); return; }
@@ -80,9 +83,13 @@ module.exports = function (RED) {
         node.status({ fill: 'blue', shape: 'dot', text: openaiTools.length + ' tools loaded' });
 
         // 2. Build initial messages
-        var messages = [];
-        if (node.systemPrompt) {
-          messages.push({ role: 'system', content: node.systemPrompt });
+        // Fix vada 3: msg.systemPrompt overrides the node config
+        // (needed for prompts synced from Confluence)
+        var systemPrompt = (typeof msg.systemPrompt === 'string' && msg.systemPrompt.length > 0)
+          ? msg.systemPrompt
+          : node.systemPrompt;
+        if (systemPrompt) {
+          messages.push({ role: 'system', content: systemPrompt });
         }
         messages.push({ role: 'user', content: userMessage });
 
